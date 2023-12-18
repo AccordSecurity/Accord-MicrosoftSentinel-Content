@@ -1,0 +1,274 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace_location": {
+            "type": "string",
+            "minLength": 1,
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location of the Log Analytics Workspace"
+            }
+        }
+    },
+    "variables": {
+        "api-azuresentinel-id": "azuresentinel-automated-response"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2018-07-01-preview",
+            "name": "[variables('api-azuresentinel-id')]",
+            "location": "[parameters('workspace_location')]",
+            "properties": {
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('workspace_location'), '/managedApis/azuresentinel')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "Module-RiskScoring",
+            "location": "[parameters('workspace_location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "actions": {
+                        "Condition": {
+                            "actions": {
+                                "Add_comment_to_incident_(V3)_2": {
+                                    "inputs": {
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['incidentArmId']",
+                                            "message": "<p><span style=\"font-size: 16px\"><strong>Risk Scoring</strong></span><br>\n<span style=\"font-size: 16px\">Initial score for incident: </span><span style=\"font-size: 16px\">@{variables('final score')}</span><span style=\"font-size: 16px\"><br>\nScore has reached threshold for escalation. Notifying incident response team.</span></p>"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/Incidents/Comment"
+                                    },
+                                    "runAfter": {},
+                                    "type": "ApiConnection"
+                                },
+                                "Response": {
+                                    "inputs": {
+                                        "body": {
+                                            "responseRequired": true
+                                        },
+                                        "statusCode": 200
+                                    },
+                                    "kind": "Http",
+                                    "runAfter": {
+                                        "Update_incident_-_raise_severity": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Response"
+                                },
+                                "Update_incident_-_raise_severity": {
+                                    "inputs": {
+                                        "body": {
+                                            "incidentArmId": "@body('Get_incident')?['id']",
+                                            "severity": "High"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                            }
+                                        },
+                                        "method": "put",
+                                        "path": "/Incidents"
+                                    },
+                                    "runAfter": {
+                                        "Add_comment_to_incident_(V3)_2": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection"
+                                }
+                            },
+                            "else": {
+                                "actions": {
+                                    "Add_comment_to_incident_(V3)": {
+                                        "inputs": {
+                                            "body": {
+                                                "incidentArmId": "@triggerBody()?['incidentArmId']",
+                                                "message": "<p><span style=\"font-size: 16px\"><strong>Risk Scoring<br>\n</strong></span><span style=\"font-size: 16px\">Initial score for incident:</span><span style=\"font-size: 16px\"><strong> </strong></span><span style=\"font-size: 16px\"><strong>@{variables('final score')}</strong></span><span style=\"font-size: 16px\"><strong><br>\n</strong></span><span style=\"font-size: 16px\">Score does not meet threshold for escalation.</span></p>"
+                                            },
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "path": "/Incidents/Comment"
+                                        },
+                                        "runAfter": {},
+                                        "type": "ApiConnection"
+                                    },
+                                    "Condition_2": {
+                                        "actions": {
+                                            "Update_incident": {
+                                                "inputs": {
+                                                    "body": {
+                                                        "classification": {
+                                                            "ClassificationAndReason": "FalsePositive - IncorrectAlertLogic",
+                                                            "ClassificationReasonText": "FP | Reason: Automation determined that duo event does not require further investigation."
+                                                        },
+                                                        "incidentArmId": "@triggerBody()?['incidentArmId']",
+                                                        "status": "Closed"
+                                                    },
+                                                    "host": {
+                                                        "connection": {
+                                                            "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                                        }
+                                                    },
+                                                    "method": "put",
+                                                    "path": "/Incidents"
+                                                },
+                                                "runAfter": {},
+                                                "type": "ApiConnection"
+                                            }
+                                        },
+                                        "expression": {
+                                            "or": [
+                                                {
+                                                    "contains": [
+                                                        "@body('Get_incident')?['properties']?['title']",
+                                                        "DY-UC-0011"
+                                                    ]
+                                                },
+                                                {
+                                                    "contains": [
+                                                        "@body('Get_incident')?['properties']?['title']",
+                                                        "Duo NRT"
+                                                    ]
+                                                }
+                                            ]
+                                        },
+                                        "runAfter": {
+                                            "Response_2": [
+                                                "Succeeded"
+                                            ]
+                                        },
+                                        "type": "If"
+                                    },
+                                    "Response_2": {
+                                        "inputs": {
+                                            "body": {
+                                                "responseRequired": false
+                                            },
+                                            "statusCode": 200
+                                        },
+                                        "kind": "Http",
+                                        "runAfter": {
+                                            "Add_comment_to_incident_(V3)": [
+                                                "Succeeded"
+                                            ]
+                                        },
+                                        "type": "Response"
+                                    }
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greaterOrEquals": [
+                                            "@variables('final score')",
+                                            25
+                                        ]
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Initialize_variable": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Get_incident": {
+                            "inputs": {
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['incidentArmId']"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/Incidents"
+                            },
+                            "runAfter": {},
+                            "type": "ApiConnection"
+                        },
+                        "Initialize_variable": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "final score",
+                                        "type": "integer",
+                                        "value": "@triggerBody()?['riskScore']"
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Get_incident": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable"
+                        }
+                    },
+                    "contentVersion": "1.0.0.0",
+                    "outputs": {},
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "manual": {
+                            "inputs": {
+                                "schema": {
+                                    "properties": {
+                                        "incidentArmId": {
+                                            "type": "string"
+                                        },
+                                        "riskScore": {
+                                            "type": "integer"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "kind": "Http",
+                            "type": "Request"
+                        }
+                    }
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azuresentinel": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('api-azuresentinel-id'))]",
+                                "connectionName": "azuresentinel",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}

@@ -1,0 +1,1816 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace_location": {
+            "type": "string",
+            "minLength": 1,
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location of the Log Analytics Workspace"
+            }
+        },
+        "workspace_resource_group": {
+            "type": "string",
+            "minLength": 1,
+            "defaultValue": "[resourceGroup().name]",
+            "metadata": {
+                "description": "Resouce Group of the Log Analytics Workspace"
+            }
+        },
+        "workspace_id": {
+            "type": "string",
+            "metadata": {
+                "description": "Workspace ID for Log Analytics where Microsoft Sentinel is setup"
+            }
+        }
+    },
+    "variables": {
+        "api-azuremonitor-id": "azuremonitor-automated-response",
+        "api-azuresentinel-id": "azuresentinel-automated-response"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2018-07-01-preview",
+            "name": "[variables('api-azuremonitor-id')]",
+            "location": "[parameters('workspace_location')]",
+            "properties": {
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('workspace_location'), '/managedApis/azuremonitorlogs')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2018-07-01-preview",
+            "name": "[variables('api-azuresentinel-id')]",
+            "location": "[parameters('workspace_location')]",
+            "properties": {
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('workspace_location'), '/managedApis/azuresentinel')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "Base-Module",
+            "location": "[parameters('workspace_location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Microsoft_Sentinel_incident": {
+                            "type": "ApiConnectionWebhook",
+                            "inputs": {
+                                "body": {
+                                    "callback_url": "@{listCallbackUrl()}"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "path": "/incident-creation"
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Add_comment_to_incident_(V3)": {
+                            "runAfter": {
+                                "For_each_4": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                    "message": "<p><span style=\"font-size: 18px\"><strong>Risk Scoring</strong></span><span style=\"font-size: 16px\"><strong><br>\n</strong></span><span style=\"font-size: 16px\">Final Score: </span><span style=\"font-size: 16px\">@{variables('RiskScore')}</span><span style=\"font-size: 16px\">&nbsp;</span></p>"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/Incidents/Comment"
+                            }
+                        },
+                        "Compose": {
+                            "runAfter": {
+                                "Filter_array_-_Other": [
+                                    "Succeeded",
+                                    "Failed"
+                                ],
+                                "For_each_Domain": [
+                                    "Succeeded",
+                                    "Failed"
+                                ],
+                                "For_each_File": [
+                                    "Succeeded",
+                                    "Failed"
+                                ],
+                                "For_each_FileHash": [
+                                    "Succeeded",
+                                    "Failed"
+                                ],
+                                "For_each_URL": [
+                                    "Succeeded",
+                                    "Failed"
+                                ],
+                                "For_each_account": [
+                                    "Succeeded",
+                                    "Failed"
+                                ],
+                                "For_each_host": [
+                                    "Succeeded",
+                                    "Failed"
+                                ],
+                                "For_each_ip": [
+                                    "Succeeded",
+                                    "Failed"
+                                ]
+                            },
+                            "type": "Compose",
+                            "inputs": {
+                                "Accounts": "@variables('AccountsArray')",
+                                "AccountsCount": "@length(variables('AccountsArray'))",
+                                "Domains": "@variables('DomainArray')",
+                                "DomainsCount": "@length(variables('DomainArray'))",
+                                "EntitiesCount": "@add(add(add(length(variables('AccountsArray')), length(variables('DomainArray'))), add(length(variables('FileArray')), length(variables('FileHashArray')))), add(add(length(variables('HostArray')), length(variables('IPArray'))), length(variables('URLArray'))))",
+                                "FileHashes": "@variables('FileHashArray')",
+                                "FileHashesCount": "@length(variables('FileHashArray'))",
+                                "Files": "@variables('FileArray')",
+                                "FilesCount": "@length(variables('FileArray'))",
+                                "Hosts": "@variables('HostArray')",
+                                "HostsCount": "@length(variables('HostArray'))",
+                                "IPs": "@variables('IPArray')",
+                                "IPsCount": "@length(variables('IPArray'))",
+                                "IncidentARMId": "@triggerBody()?['object']?['id']",
+                                "ModuleName": "@{parameters('PlaybookInternalName')}",
+                                "OtherEntities": "@body('Filter_array_-_Other')",
+                                "OtherEntitiesCount": "@length(body('Filter_array_-_Other'))",
+                                "TenantDisplayName": "@{body('HTTP_-_Get_Tenant')?['value']?[0]?['displayName']}",
+                                "TenantId": "@{body('HTTP_-_Get_Tenant')?['value']?[0]?['id']}",
+                                "URLs": "@variables('URLArray')",
+                                "URLsCount": "@length(variables('URLArray'))"
+                            }
+                        },
+                        "Condition_-_Account_Comment": {
+                            "actions": {
+                                "Add_comment_to_incident_(V3)_-_User_Enrichment": {
+                                    "runAfter": {
+                                        "Append_to_string_variable": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                            "message": "<p><span style=\"font-size: 14px\"><strong>Account Enrichment </strong></span>@{variables('AccountComment')}@{if(not(equals(outputs('Compose')?['ModuleVersions'], null)), if(equals(parameters('PlaybookVersion'),outputs('Compose')?['ModuleVersions']?[parameters('PlaybookInternalName')]), '', concat('<br>Sentinel Triage AssistanT - Update Available: Installed Version: ', parameters('PlaybookVersion'), ', Available Version: ', outputs('Compose')?['ModuleVersions']?[parameters('PlaybookInternalName')])) , '')}</p>"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/Incidents/Comment"
+                                    }
+                                },
+                                "Append_to_string_variable": {
+                                    "runAfter": {
+                                        "For_each": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToStringVariable",
+                                    "inputs": {
+                                        "name": "AccountComment",
+                                        "value": "</table>"
+                                    }
+                                },
+                                "Create_HTML_table_-_Accounts": {
+                                    "runAfter": {},
+                                    "type": "Table",
+                                    "inputs": {
+                                        "columns": [
+                                            {
+                                                "header": "UserPrincipalName",
+                                                "value": "@coalesce(item()?['userPrincipalName'], concat(item()?['RawEntity']?['friendlyName'], ' (Unresolved Entity)'))"
+                                            },
+                                            {
+                                                "header": "City",
+                                                "value": "@coalesce(item()?['City'], item()?['RawEntity']?['additionalData']?['City'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "Country",
+                                                "value": "@coalesce(item()?['Country'], item()?['RawEntity']?['additionalData']?['Country'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "Department",
+                                                "value": "@coalesce(item()?['RawEntity']?['additionalData']?['Department'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "JobTitle",
+                                                "value": "@coalesce(item()?['RawEntity']?['additionalData']?['JobTitle'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "ManagerUPN",
+                                                "value": "@coalesce(item()?['RawEntity']?['additionalData']?['ManagerName'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "MfaRegistered",
+                                                "value": "@coalesce(item()?['isMfaRegistered'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "SSPREnabled",
+                                                "value": "@coalesce(item()?['isSSPREnabled'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "SSPRRegistered",
+                                                "value": "@coalesce(item()?['isSSPRRegistered'], 'Unknown')"
+                                            },
+                                            {
+                                                "header": "IsVIP",
+                                                "value": "@item()?['isVIP']"
+                                            }
+                                        ],
+                                        "format": "HTML",
+                                        "from": "@variables('AccountsArray')"
+                                    }
+                                },
+                                "For_each": {
+                                    "foreach": "@variables('AccountsArray')",
+                                    "actions": {
+                                        "Append_account_details": {
+                                            "runAfter": {},
+                                            "type": "AppendToStringVariable",
+                                            "inputs": {
+                                                "name": "AccountComment",
+                                                "value": "<tr><td>@{coalesce(item()?['userPrincipalName'], concat(item()?['RawEntity']?['friendlyName'], ' (Unresolved Entity)'))}</td><td>@{coalesce(item()?['City'], item()?['RawEntity']?['additionalData']?['City'], 'Unknown')}</td><td>@{coalesce(item()?['Country'], item()?['RawEntity']?['additionalData']?['Country'], 'Unknown')}</td><td>@{coalesce(item()?['RawEntity']?['additionalData']?['Department'], item()?['Department'], 'Unknown')}</td><td>@{coalesce(item()?['RawEntity']?['additionalData']?['JobTitle'], item()?['JobTitle'], 'Unknown')}</td><td>@{coalesce(item()?['RawEntity']?['additionalData']?['ManagerName'], item()?['managerUpn'], 'Unknown')}</td><td>@{coalesce(item()?['isMfaRegistered'], 'Unknown')}</td>"
+                                            }
+                                        },
+                                        "Condition_-_if_account_enabled": {
+                                            "actions": {
+                                                "Append_to_string_variable_12": {
+                                                    "runAfter": {},
+                                                    "type": "AppendToStringVariable",
+                                                    "inputs": {
+                                                        "name": "AccountComment",
+                                                        "value": "<td>✅ True</td>"
+                                                    }
+                                                }
+                                            },
+                                            "runAfter": {
+                                                "Append_account_details": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "else": {
+                                                "actions": {
+                                                    "Append_to_string_variable_13": {
+                                                        "runAfter": {},
+                                                        "type": "AppendToStringVariable",
+                                                        "inputs": {
+                                                            "name": "AccountComment",
+                                                            "value": "<td>⛔False</td>"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "equals": [
+                                                            "@item()?['Enabled']",
+                                                            true
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If"
+                                        },
+                                        "Condition_if_VIP_2": {
+                                            "actions": {
+                                                "Append_to_string_variable_2": {
+                                                    "runAfter": {},
+                                                    "type": "AppendToStringVariable",
+                                                    "inputs": {
+                                                        "name": "AccountComment",
+                                                        "value": "<td>@{items('For_each')?['isVIP']} <strong style=\"color:red\">+5 risk points</strong></td></tr>"
+                                                    }
+                                                }
+                                            },
+                                            "runAfter": {
+                                                "Condition_-_if_account_enabled": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "else": {
+                                                "actions": {
+                                                    "Append_to_string_variable_3": {
+                                                        "runAfter": {},
+                                                        "type": "AppendToStringVariable",
+                                                        "inputs": {
+                                                            "name": "AccountComment",
+                                                            "value": "<td>@{items('For_each')?['isVIP']}</td></tr>"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "equals": [
+                                                            "@items('For_each')?['isVIP']",
+                                                            "True"
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Create_HTML_table_-_Accounts": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Foreach"
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_variable": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('AccountsArray'))",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Condition_-_Host_Comment": {
+                            "actions": {
+                                "Add_comment_to_incident_(V3)_2": {
+                                    "runAfter": {
+                                        "Append_to_string_variable_8": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                            "message": "<p><span style=\"font-size: 14px\"><strong>Host Enrichment </strong></span><span style=\"font-size: 14px\"><strong>@{variables('Host Comment')}</strong></span><span style=\"font-size: 14px\"><strong></strong></span></p>"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/Incidents/Comment"
+                                    }
+                                },
+                                "Append_to_string_variable_8": {
+                                    "runAfter": {
+                                        "For_each_3": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToStringVariable",
+                                    "inputs": {
+                                        "name": "Host Comment",
+                                        "value": "</table>"
+                                    }
+                                },
+                                "For_each_3": {
+                                    "foreach": "@variables('HostArray')",
+                                    "actions": {
+                                        "Append_to_string_variable_7": {
+                                            "runAfter": {},
+                                            "type": "AppendToStringVariable",
+                                            "inputs": {
+                                                "name": "Host Comment",
+                                                "value": "<tr><td>@{items('For_each_3')?['CortexInfo'][0]['endpoint_name']}</td><td>@{items('For_each_3')?['CortexInfo'][0]['operating_system']}</td><td>@{items('For_each_3')?['CortexInfo'][0]['ip']}</td><td>@{items('For_each_3')?['CortexInfo'][0]['public_ip']}</td><td>@{items('For_each_3')?['CortexInfo'][0]['operational_status']}</td><td>@{items('For_each_3')?['CortexInfo'][0]['content_status']}</td></tr>"
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {},
+                                    "type": "Foreach"
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_variable_3": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('HostArray'))",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Condition_-_IP_Comment": {
+                            "actions": {
+                                "Add_comment_to_incident_(V3)_-_IP_Enrichment": {
+                                    "runAfter": {
+                                        "Append_to_string_variable_6": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                            "message": "<p><span style=\"font-size: 14px\"><strong>IP Address Enrichment </strong></span>@{variables('IP Comment')}</p>"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/Incidents/Comment"
+                                    }
+                                },
+                                "Append_to_string_variable_6": {
+                                    "runAfter": {
+                                        "For_each_2": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToStringVariable",
+                                    "inputs": {
+                                        "name": "IP Comment",
+                                        "value": "</table>"
+                                    }
+                                },
+                                "Create_HTML_table_-_IP_Comment": {
+                                    "runAfter": {},
+                                    "type": "Table",
+                                    "inputs": {
+                                        "columns": [
+                                            {
+                                                "header": "IP",
+                                                "value": "@item()?['enrichmentResults'][0]['query']"
+                                            },
+                                            {
+                                                "header": "City",
+                                                "value": "@item()?['enrichmentResults'][0]['city']"
+                                            },
+                                            {
+                                                "header": "State",
+                                                "value": "@item()?['enrichmentResults'][0]['regionName']"
+                                            },
+                                            {
+                                                "header": "Country",
+                                                "value": "@item()?['enrichmentResults'][0]['country']"
+                                            },
+                                            {
+                                                "header": "ISP",
+                                                "value": "@item()?['enrichmentResults'][0]['isp']"
+                                            },
+                                            {
+                                                "header": "ASN",
+                                                "value": "@item()?['enrichmentResults'][0]['as']"
+                                            },
+                                            {
+                                                "header": "Mobile",
+                                                "value": "@item()?['enrichmentResults'][0]['mobile']"
+                                            },
+                                            {
+                                                "header": "Proxy/Hosting",
+                                                "value": "@{item()?['enrichmentResults'][0]['proxy']}/@{item()?['enrichmentResults'][0]['hosting']}"
+                                            },
+                                            {
+                                                "header": "AbuseIPDBScore",
+                                                "value": "@item()?['enrichmentResults'][1]['abuseConfidenceScore']"
+                                            }
+                                        ],
+                                        "format": "HTML",
+                                        "from": "@variables('IPComment')"
+                                    }
+                                },
+                                "For_each_2": {
+                                    "foreach": "@variables('IPComment')",
+                                    "actions": {
+                                        "Append_to_string_variable_11": {
+                                            "runAfter": {
+                                                "Condition_-_check_abuseIPDB_score": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "AppendToStringVariable",
+                                            "inputs": {
+                                                "name": "IP Comment",
+                                                "value": "</tr>"
+                                            }
+                                        },
+                                        "Condition_-_check_abuseIPDB_score": {
+                                            "actions": {
+                                                "Append_to_string_variable_9": {
+                                                    "runAfter": {},
+                                                    "type": "AppendToStringVariable",
+                                                    "inputs": {
+                                                        "name": "IP Comment",
+                                                        "value": "<td>@{items('For_each_2')?['enrichmentResults'][1]['abuseConfidenceScore']}<strong style=\"color:red\">+5 risk points</strong></td>"
+                                                    }
+                                                }
+                                            },
+                                            "runAfter": {
+                                                "Condition_-_check_if_risky_ip": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "else": {
+                                                "actions": {
+                                                    "Append_to_string_variable_10": {
+                                                        "runAfter": {},
+                                                        "type": "AppendToStringVariable",
+                                                        "inputs": {
+                                                            "name": "IP Comment",
+                                                            "value": "<td>@{items('For_each_2')?['enrichmentResults'][1]['abuseConfidenceScore']}</td>"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "greaterOrEquals": [
+                                                            "@items('For_each_2')?['enrichmentResults'][1]['abuseConfidenceScore']",
+                                                            25
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If"
+                                        },
+                                        "Condition_-_check_if_risky_ip": {
+                                            "actions": {
+                                                "Append_to_string_variable_4": {
+                                                    "runAfter": {},
+                                                    "type": "AppendToStringVariable",
+                                                    "inputs": {
+                                                        "name": "IP Comment",
+                                                        "value": "<tr><td>@{items('For_each_2')?['enrichmentResults'][0]['query']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['city']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['regionName']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['country']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['isp']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['as']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['mobile']}</td><td>Proxy: @{items('For_each_2')?['enrichmentResults'][0]['proxy']}\\nHosting: @{items('For_each_2')?['enrichmentResults'][0]['hosting']}\\n<strong style=\"color:red\">+5 risk points</strong></td>"
+                                                    }
+                                                }
+                                            },
+                                            "runAfter": {},
+                                            "else": {
+                                                "actions": {
+                                                    "Append_to_string_variable_5": {
+                                                        "runAfter": {},
+                                                        "type": "AppendToStringVariable",
+                                                        "inputs": {
+                                                            "name": "IP Comment",
+                                                            "value": "<tr><td>@{items('For_each_2')?['enrichmentResults'][0]['query']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['city']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['regionName']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['country']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['isp']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['as']}</td><td>@{items('For_each_2')?['enrichmentResults'][0]['mobile']}</td><td>Proxy: @{items('For_each_2')?['enrichmentResults'][0]['proxy']}\\nHosting: @{items('For_each_2')?['enrichmentResults'][0]['hosting']}</td>"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "expression": {
+                                                "or": [
+                                                    {
+                                                        "equals": [
+                                                            "@items('For_each_2')?['enrichmentResults'][0]['proxy']",
+                                                            true
+                                                        ]
+                                                    },
+                                                    {
+                                                        "equals": [
+                                                            "@items('For_each_2')?['enrichmentResults'][0]['hosting']",
+                                                            true
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Create_HTML_table_-_IP_Comment": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Foreach"
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_variable_2": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('IPComment'))",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Condition_Entity_Check": {
+                            "actions": {
+                                "Add_comment_to_incident_-_No_Entities": {
+                                    "runAfter": {},
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                            "message": "<p>Playbook-Director failed to analyze this incident. This error was due to no incident entities being available at the time the incident was processed.</p>"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/Incidents/Comment"
+                                    }
+                                },
+                                "Response_-_No_Entities_Found": {
+                                    "runAfter": {
+                                        "Add_comment_to_incident_-_No_Entities": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Response",
+                                    "kind": "Http",
+                                    "inputs": {
+                                        "body": {
+                                            "Error": "@{parameters('PlaybookInternalName')} failed to execute with status no entities found",
+                                            "PlaybookName": "@{workflow()?['name']}",
+                                            "PlaybookResourceId": "@{workflow()?['id']}",
+                                            "PlaybookRunId": "@{workflow()?['run']?['name']}",
+                                            "PlaybookVersion": "@parameters('PlaybookVersion')"
+                                        },
+                                        "statusCode": 404
+                                    }
+                                },
+                                "Terminate": {
+                                    "runAfter": {
+                                        "Response_-_No_Entities_Found": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Terminate",
+                                    "inputs": {
+                                        "runError": {
+                                            "code": "404",
+                                            "message": "No entities present in incident trigger"
+                                        },
+                                        "runStatus": "Failed"
+                                    }
+                                }
+                            },
+                            "runAfter": {},
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@length(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Filter_array_-_Accounts": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@equals(toLower(item()['kind']), 'account')"
+                            }
+                        },
+                        "Filter_array_-_Domains": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@equals(toLower(item()['kind']), 'dnsresolution')"
+                            }
+                        },
+                        "Filter_array_-_File_Hashes": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@equals(toLower(item()['kind']), 'filehash')"
+                            }
+                        },
+                        "Filter_array_-_Files": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@equals(toLower(item()['kind']), 'file')"
+                            }
+                        },
+                        "Filter_array_-_Hosts": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@equals(toLower(item()['kind']), 'host')"
+                            }
+                        },
+                        "Filter_array_-_IPs": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@equals(toLower(item()['kind']), 'ip')"
+                            }
+                        },
+                        "Filter_array_-_Other": {
+                            "runAfter": {
+                                "HTTP_-_Get_Tenant": [
+                                    "Succeeded",
+                                    "Failed"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@and(not(equals(toLower(item()['kind']), 'url')),not(equals(toLower(item()['kind']), 'ip')),not(equals(toLower(item()['kind']), 'host')),not(equals(toLower(item()['kind']), 'file')),not(equals(toLower(item()['kind']), 'filehash')),not(equals(toLower(item()['kind']), 'dnsresolution')),not(equals(toLower(item()['kind']), 'account')))"
+                            }
+                        },
+                        "Filter_array_-_URLs": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Query",
+                            "inputs": {
+                                "from": "@array(triggerBody()?['object']?['properties']?['relatedEntities'])",
+                                "where": "@equals(toLower(item()['kind']), 'url')"
+                            }
+                        },
+                        "For_each_4": {
+                            "foreach": "@triggerBody()?['object']?['properties']?['Alerts']",
+                            "actions": {
+                                "Switch_2": {
+                                    "runAfter": {},
+                                    "cases": {
+                                        "Case": {
+                                            "case": "Azure Active Directory Identity Protection",
+                                            "actions": {}
+                                        }
+                                    },
+                                    "default": {
+                                        "actions": {}
+                                    },
+                                    "expression": "@items('For_each_4')?['properties']?['providerAlertId']",
+                                    "type": "Switch"
+                                }
+                            },
+                            "runAfter": {
+                                "Condition_-_Account_Comment": [
+                                    "Succeeded"
+                                ],
+                                "Condition_-_Host_Comment": [
+                                    "Succeeded"
+                                ],
+                                "Condition_-_IP_Comment": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_Domain": {
+                            "foreach": "@body('Filter_array_-_Domains')",
+                            "actions": {
+                                "Append_to_DomainArray": {
+                                    "runAfter": {},
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "DomainArray",
+                                        "value": {
+                                            "RawEntity": "@item()['properties']"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_DomainArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_File": {
+                            "foreach": "@body('Filter_array_-_Files')",
+                            "actions": {
+                                "Append_to_FileArray": {
+                                    "runAfter": {},
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "FileArray",
+                                        "value": {
+                                            "RawEntity": "@items('For_each_File')['properties']"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_FileArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_FileHash": {
+                            "foreach": "@body('Filter_array_-_File_Hashes')",
+                            "actions": {
+                                "Append_to_FileHashArray": {
+                                    "runAfter": {},
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "FileHashArray",
+                                        "value": {
+                                            "RawEntity": "@items('For_each_FileHash')['properties']"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_FileHashArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_URL": {
+                            "foreach": "@body('Filter_array_-_URLs')",
+                            "actions": {
+                                "Append_to_URLArray": {
+                                    "runAfter": {},
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "URLArray",
+                                        "value": {
+                                            "RawEntity": "@items('For_each_URL')['properties']"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_URLArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_account": {
+                            "foreach": "@body('Select_Accounts')",
+                            "actions": {
+                                "Append_to_AccountArray": {
+                                    "runAfter": {
+                                        "Compose_User": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "AccountsArray",
+                                        "value": "@outputs('Compose_User')"
+                                    }
+                                },
+                                "Append_to_AccountArray_Unenriched": {
+                                    "runAfter": {
+                                        "Compose_User_Unenriched": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "AccountsArray",
+                                        "value": "@outputs('Compose_User_Unenriched')"
+                                    }
+                                },
+                                "Check_if_VIP": {
+                                    "runAfter": {
+                                        "Compose_UPN": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "body": "let vips = _GetWatchlist('vip_users');\nvips\n| where SearchKey contains \"@{outputs('Compose_UPN')}\"",
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/queryData",
+                                        "queries": {
+                                            "resourcegroups": "[parameters('workspace_resource_group')]",
+                                            "resourcename": "LogAnalyticsAndSentinel",
+                                            "resourcetype": "Log Analytics Workspace",
+                                            "subscriptions": "[parameters('workspace_id')]",
+                                            "timerange": "Last 24 hours"
+                                        }
+                                    }
+                                },
+                                "Compose_UPN": {
+                                    "runAfter": {
+                                        "Compose_UserId": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@coalesce(body('HTTP_-_Email')?['value']?[0]?['userPrincipalName'],body('HTTP_-_UPN')?['userPrincipalName'],body('HTTP_-_AADId')?['userPrincipalName'],body('HTTP_-_ObjectSid')?['value']?[0]?['userPrincipalName'],body('HTTP_-_SamAccountName')?['value']?[0]?['userPrincipalName'],body('HTTP_-_DistinguishedName')?['value']?[0]?['userPrincipalName'])"
+                                },
+                                "Compose_User": {
+                                    "runAfter": {
+                                        "HTTP_-_Security_Info": [
+                                            "Succeeded",
+                                            "Failed"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@addProperty(addProperty(addProperty(addProperty(addProperty(addProperty(addProperty(coalesce(body('HTTP_-_Email')?['value']?[0],body('HTTP_-_UPN'),body('HTTP_-_AADId'),body('HTTP_-_ObjectSid')?['value']?[0],body('HTTP_-_SamAccountName')?['value']?[0],body('HTTP_-_DistinguishedName')?['value']?[0]), 'AssignedRoles', body('Select_Roles')), 'RawEntity', item()['RawEntity']), 'isAADPrivileged', if(greater(length(body('Select_Roles')), 0), true, false)), 'isMfaRegistered', body('HTTP_-_Security_Info')?['value']?[0]?['isMfaRegistered']), 'isSSPREnabled', body('HTTP_-_Security_Info')?['value']?[0]?['isEnabled']), 'isSSPRRegistered', body('HTTP_-_Security_Info')?['value']?[0]?['isRegistered']), 'isVIP', variables('VIP'))"
+                                },
+                                "Compose_UserId": {
+                                    "runAfter": {
+                                        "Switch": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@coalesce(body('HTTP_-_Email')?['value']?[0]?['id'],body('HTTP_-_UPN')?['id'],body('HTTP_-_AADId')?['id'],body('HTTP_-_ObjectSid')?['value']?[0]?['id'],body('HTTP_-_SamAccountName')?['value']?[0]?['id'],body('HTTP_-_DistinguishedName')?['value']?[0]?['id'])"
+                                },
+                                "Compose_User_Unenriched": {
+                                    "runAfter": {
+                                        "HTTP_-_Roles": [
+                                            "Failed"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": {
+                                        "City": "@{coalesce(body('HTTP_-_Email')?['value']?[0]?['city'],body('HTTP_-_UPN')?['city'],body('HTTP_-_AADId')?['city'],body('HTTP_-_ObjectSid')?['value']?[0]?['city'],body('HTTP_-_SamAccountName')?['value']?[0]?['city'],body('HTTP_-_DistinguishedName')?['value']?[0]?['city'], 'Unknown')}",
+                                        "Country": "@{coalesce(body('HTTP_-_Email')?['value']?[0]?['country'],body('HTTP_-_UPN')?['country'],body('HTTP_-_AADid')?['country'],body('HTTP_-_ObjectSid')?['value']?[0]?['country'],body('HTTP_-_SamAccountName')?['value']?[0]?['country'],body('HTTP_-_DistinguishedName')?['value']?[0]?['country'], 'Unknown')}",
+                                        "Department": "@{coalesce(body('HTTP_-_Email')?['value']?[0]?['department'],body('HTTP_-_UPN')?['department'],body('HTTP_-_AADid')?['department'],body('HTTP_-_ObjectSid')?['value']?[0]?['department'],body('HTTP_-_SamAccountName')?['value']?[0]?['department'],body('HTTP_-_DistinguishedName')?['value']?[0]?['department'], 'Unknown')}",
+                                        "Enabled": "@{coalesce(body('HTTP_-_Email')?['value']?[0]?['accountEnabled'],body('HTTP_-_UPN')?['accountEnabled'],body('HTTP_-_AADid')?['accountEnabled'],body('HTTP_-_ObjectSid')?['value']?[0]?['accountEnabled'],body('HTTP_-_SamAccountName')?['value']?[0]?['accountEnabled'],body('HTTP_-_DistinguishedName')?['value']?[0]?['accountEnabled'], 'Unknown')}",
+                                        "JobTitle": "@{coalesce(body('HTTP_-_Email')?['value']?[0]?['jobTitle'],body('HTTP_-_UPN')?['jobTitle'],body('HTTP_-_AADid')?['jobTitle'],body('HTTP_-_ObjectSid')?['value']?[0]?['jobTitle'],body('HTTP_-_SamAccountName')?['value']?[0]?['jobTitle'],body('HTTP_-_DistinguishedName')?['value']?[0]?['jobTitle'], 'Unknown')}",
+                                        "RawEntity": "@items('For_each_account')['RawEntity']",
+                                        "isVIP": "@{variables('VIP')}",
+                                        "managerUpn": "@{coalesce(body('HTTP_-_Email')?['value']?[0]?['manager']?['userPrincipalName'],body('HTTP_-_UPN')?['manager']?['userPrincipalName'],body('HTTP_-_AADid')?['manager']?['userPrincipalName'],body('HTTP_-_ObjectSid')?['value']?[0]?['manager']?['userPrincipalName'],body('HTTP_-_SamAccountName')?['value']?[0]?['manager']?['userPrincipalName'],body('HTTP_-_DistinguishedName')?['value']?[0]?['manager']?['userPrincipalName'], 'Unknown')}",
+                                        "userPrincipalName": "@{coalesce(body('HTTP_-_Email')?['value']?[0]?['userPrincipalName'],body('HTTP_-_UPN')?['userPrincipalName'],body('HTTP_-_AADId')?['userPrincipalName'],body('HTTP_-_ObjectSid')?['value']?[0]?['userPrincipalName'],body('HTTP_-_SamAccountName')?['value']?[0]?['userPrincipalName'],body('HTTP_-_DistinguishedName')?['value']?[0]?['userPrincipalName'], 'Unknown')}"
+                                    }
+                                },
+                                "Condition_-_if_VIP": {
+                                    "actions": {
+                                        "Set_variable": {
+                                            "runAfter": {},
+                                            "type": "SetVariable",
+                                            "inputs": {
+                                                "name": "VIP",
+                                                "value": true
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Check_if_VIP": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "greater": [
+                                                    "@length(body('Check_if_VIP')?['value'])",
+                                                    0
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "HTTP_-_Roles": {
+                                    "runAfter": {
+                                        "Condition_-_if_VIP": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "authentication": {
+                                            "audience": "https://graph.microsoft.com",
+                                            "authority": "https://login.microsoft.com",
+                                            "clientId": "",
+                                            "secret": "",
+                                            "tenant": "",
+                                            "type": "ActiveDirectoryOAuth"
+                                        },
+                                        "method": "GET",
+                                        "uri": "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?$filter=principalId%20eq%20'@{outputs('Compose_UserId')}'&$expand=roleDefinition"
+                                    }
+                                },
+                                "HTTP_-_Security_Info": {
+                                    "runAfter": {
+                                        "Select_Roles": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "authentication": {
+                                            "audience": "https://graph.microsoft.com",
+                                            "authority": "https://login.microsoft.com",
+                                            "clientId": "",
+                                            "secret": "",
+                                            "tenant": "",
+                                            "type": "ActiveDirectoryOAuth"
+                                        },
+                                        "headers": {
+                                            "Content-Type": "application/json"
+                                        },
+                                        "method": "GET",
+                                        "uri": "https://graph.microsoft.com/beta/reports/credentialUserRegistrationDetails?$filter=userPrincipalName%20eq%20'@{outputs('Compose_UPN')}'"
+                                    }
+                                },
+                                "Reset_VIP_variable": {
+                                    "runAfter": {
+                                        "Append_to_AccountArray": [
+                                            "Succeeded",
+                                            "Skipped",
+                                            "Failed"
+                                        ],
+                                        "Append_to_AccountArray_Unenriched": [
+                                            "Succeeded",
+                                            "Skipped",
+                                            "Failed"
+                                        ]
+                                    },
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "VIP",
+                                        "value": false
+                                    }
+                                },
+                                "Select_Roles": {
+                                    "runAfter": {
+                                        "HTTP_-_Roles": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Select",
+                                    "inputs": {
+                                        "from": "@body('HTTP_-_Roles')['value']",
+                                        "select": {
+                                            "Role": "@item()['roleDefinition']['displayName']"
+                                        }
+                                    }
+                                },
+                                "Switch": {
+                                    "runAfter": {},
+                                    "cases": {
+                                        "Case_-_AADId": {
+                                            "case": "AADId",
+                                            "actions": {
+                                                "HTTP_-_AADId": {
+                                                    "runAfter": {},
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://graph.microsoft.com",
+                                                            "authority": "https://login.microsoft.com",
+                                                            "clientId": "",
+                                                            "secret": "",
+                                                            "tenant": "",
+                                                            "type": "ActiveDirectoryOAuth"
+                                                        },
+                                                        "method": "GET",
+                                                        "uri": "https://graph.microsoft.com/v1.0/users/@{items('For_each_account')['aadUserId']}?$select=@{variables('SelectProperties')}"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "Case_-_DistinguishedName": {
+                                            "case": "DistinguishedName",
+                                            "actions": {
+                                                "HTTP_-_DistinguishedName": {
+                                                    "runAfter": {},
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://graph.microsoft.com",
+                                                            "authority": "https://login.microsoft.com",
+                                                            "clientId": "",
+                                                            "secret": "",
+                                                            "tenant": "",
+                                                            "type": "ActiveDirectoryOAuth"
+                                                        },
+                                                        "method": "GET",
+                                                        "uri": "https://graph.microsoft.com/beta/users?$filter=(onPremisesDistinguishedName%20eq%20'@{items('For_each_account')['accountName']}')&$select=@{variables('SelectProperties')}"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "Case_-_ObjectSid": {
+                                            "case": "ObjectSid",
+                                            "actions": {
+                                                "HTTP_-_ObjectSid": {
+                                                    "runAfter": {},
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://graph.microsoft.com",
+                                                            "authority": "https://login.microsoft.com",
+                                                            "clientId": "",
+                                                            "secret": "",
+                                                            "tenant": "",
+                                                            "type": "ActiveDirectoryOAuth"
+                                                        },
+                                                        "method": "GET",
+                                                        "uri": "https://graph.microsoft.com/v1.0/users?$filter=(onPremisesSecurityIdentifier%20eq%20'@{items('For_each_account')['sid']}')&$select=@{variables('SelectProperties')}"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "Case_-_SamAccountName": {
+                                            "case": "SamAccountName",
+                                            "actions": {
+                                                "Filter_array": {
+                                                    "runAfter": {
+                                                        "HTTP_-_SamAccountName": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "Query",
+                                                    "inputs": {
+                                                        "from": "@body('HTTP_-_SamAccountName')['value']",
+                                                        "where": "@and(equals(item()['onPremisesSamAccountName'], items('For_each_account')['accountName']),equals(toUpper(split(item()['onPremisesDomainName'], '.')[0]), items('For_each_account')['ntDomain']))"
+                                                    }
+                                                },
+                                                "HTTP_-_SamAccountName": {
+                                                    "runAfter": {},
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://graph.microsoft.com",
+                                                            "authority": "https://login.microsoft.com",
+                                                            "clientId": "",
+                                                            "secret": "",
+                                                            "tenant": "",
+                                                            "type": "ActiveDirectoryOAuth"
+                                                        },
+                                                        "method": "GET",
+                                                        "uri": "https://graph.microsoft.com/beta/users?$filter=mailNickname%20eq%20'@{items('For_each_account')['accountName']}'%20or%20startswith(onPremisesUserPrincipalName,'@{items('For_each_account')['accountName']}')&$select=@{variables('SelectProperties')}"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "Case_-_UPN": {
+                                            "case": "UPN",
+                                            "actions": {
+                                                "HTTP_-_Email": {
+                                                    "runAfter": {
+                                                        "HTTP_-_UPN": [
+                                                            "Failed"
+                                                        ]
+                                                    },
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://graph.microsoft.com",
+                                                            "authority": "https://login.microsoft.com",
+                                                            "clientId": "",
+                                                            "secret": "",
+                                                            "tenant": "",
+                                                            "type": "ActiveDirectoryOAuth"
+                                                        },
+                                                        "method": "GET",
+                                                        "uri": "https://graph.microsoft.com/v1.0/users?$filter=(mail%20eq%20'@{concat(item()['accountName'], '@', item()['upnSuffix'])}')&$select=@{variables('SelectProperties')}"
+                                                    }
+                                                },
+                                                "HTTP_-_UPN": {
+                                                    "runAfter": {},
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://graph.microsoft.com",
+                                                            "authority": "https://login.microsoft.com",
+                                                            "clientId": "",
+                                                            "secret": "",
+                                                            "tenant": "",
+                                                            "type": "ActiveDirectoryOAuth"
+                                                        },
+                                                        "method": "GET",
+                                                        "uri": "https://graph.microsoft.com/v1.0/users/@{concat(item()['accountName'], '@', item()['upnSuffix'])}?$select=@{variables('SelectProperties')}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "default": {
+                                        "actions": {}
+                                    },
+                                    "expression": "@item()['accountType']",
+                                    "type": "Switch"
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_VIP": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_host": {
+                            "foreach": "@body('Filter_array_-_Hosts')",
+                            "actions": {
+                                "Append_to_array_variable": {
+                                    "runAfter": {
+                                        "Module-HostEnrichment": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "HostArray",
+                                        "value": {
+                                            "CortexInfo": "@body('Module-HostEnrichment')",
+                                            "DnsDomain": "@{items('For_each_host')?['properties']?['dnsDomain']}",
+                                            "FQDN": "@{concat(item()['properties']?['hostName'], '.', item()['properties']?['dnsDomain'])}",
+                                            "Hostname": "@{items('For_each_host')?['properties']?['hostName']}",
+                                            "RawEntity": "@items('For_each_host')?['properties']"
+                                        }
+                                    }
+                                },
+                                "Module-HostEnrichment": {
+                                    "runAfter": {},
+                                    "type": "Http",
+                                    "inputs": {
+                                        "body": {
+                                            "hostname": "@{split(items('For_each_host')['properties']['hostName'], '.')[0]}"
+                                        },
+                                        "method": "POST",
+                                        "uri": ""
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_HostArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_ip": {
+                            "foreach": "@body('Filter_array_-_IPs')",
+                            "actions": {
+                                "Condition": {
+                                    "actions": {
+                                        "Append_to_IPArray_-_Geo_Failure": {
+                                            "runAfter": {
+                                                "HTTP_-_Module-EnrichIPAddress": [
+                                                    "TimedOut",
+                                                    "Failed"
+                                                ]
+                                            },
+                                            "type": "AppendToArrayVariable",
+                                            "inputs": {
+                                                "name": "IPArray",
+                                                "value": {
+                                                    "Address": "@{items('For_each_ip')['properties']['address']}",
+                                                    "GeoData": {},
+                                                    "RawEntity": "@items('For_each_ip')['properties']"
+                                                }
+                                            }
+                                        },
+                                        "Append_to_IPArray_With_GeoData": {
+                                            "runAfter": {
+                                                "HTTP_-_Module-EnrichIPAddress": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "AppendToArrayVariable",
+                                            "inputs": {
+                                                "name": "IPArray",
+                                                "value": {
+                                                    "Address": "@{items('For_each_ip')['properties']['address']}",
+                                                    "GeoData": "@body('HTTP_-_Module-EnrichIPAddress')",
+                                                    "RawEntity": "@items('For_each_ip')['properties']"
+                                                }
+                                            }
+                                        },
+                                        "Append_to_IPComment": {
+                                            "runAfter": {
+                                                "Append_to_IPArray_With_GeoData": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "AppendToArrayVariable",
+                                            "inputs": {
+                                                "name": "IPComment",
+                                                "value": {
+                                                    "enrichmentResults": "@body('HTTP_-_Module-EnrichIPAddress')"
+                                                }
+                                            }
+                                        },
+                                        "HTTP_-_Module-EnrichIPAddress": {
+                                            "runAfter": {},
+                                            "type": "Http",
+                                            "inputs": {
+                                                "body": {
+                                                    "incidentArmId": "@{triggerBody()?['object']?['id']}",
+                                                    "ipAddress": [
+                                                        "@{items('For_each_ip')?['properties']['address']}"
+                                                    ]
+                                                },
+                                                "method": "POST",
+                                                "uri": ""
+                                            }
+                                        },
+                                        "Increment_variable": {
+                                            "runAfter": {
+                                                "Append_to_IPComment": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "IncrementVariable",
+                                            "inputs": {
+                                                "name": "RiskScore",
+                                                "value": "@body('HTTP_-_Module-EnrichIPAddress')?[2]['riskPoints']"
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {},
+                                    "else": {
+                                        "actions": {
+                                            "Append_to_IPArray_Without_GeoData": {
+                                                "runAfter": {},
+                                                "type": "AppendToArrayVariable",
+                                                "inputs": {
+                                                    "name": "IPArray",
+                                                    "value": {
+                                                        "Address": "@{items('For_each_ip')['properties']['address']}",
+                                                        "GeoData": {},
+                                                        "RawEntity": "@items('For_each_ip')['properties']"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    true,
+                                                    true
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_IPComment_Array": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "Get_secret": {
+                            "runAfter": {
+                                "Condition_Entity_Check": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "kv-connection"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/secrets/@{encodeURIComponent('spsecret')}/value"
+                            },
+                            "runtimeConfiguration": {
+                                "secureData": {
+                                    "properties": [
+                                        "outputs"
+                                    ]
+                                }
+                            }
+                        },
+                        "HTTP_-_Get_Tenant": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "authentication": {
+                                    "audience": "https://graph.microsoft.com",
+                                    "authority": "https://login.microsoft.com",
+                                    "clientId": "",
+                                    "secret": "",
+                                    "tenant": "",
+                                    "type": "ActiveDirectoryOAuth"
+                                },
+                                "method": "GET",
+                                "uri": "https://graph.microsoft.com/v1.0/organization"
+                            }
+                        },
+                        "HTTP_-_Test_API_Access": {
+                            "runAfter": {
+                                "Get_secret": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "authentication": {
+                                    "audience": "https://graph.microsoft.com",
+                                    "authority": "https://login.microsoft.com",
+                                    "clientId": "",
+                                    "secret": "",
+                                    "tenant": "",
+                                    "type": "ActiveDirectoryOAuth"
+                                },
+                                "method": "GET",
+                                "uri": "https://graph.microsoft.com/v1.0/users?$top=1&$select=id"
+                            }
+                        },
+                        "Initialize_AccountsArray": {
+                            "runAfter": {
+                                "Select_Accounts": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "AccountsArray",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_DomainArray": {
+                            "runAfter": {
+                                "Filter_array_-_Domains": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "DomainArray",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_FileArray": {
+                            "runAfter": {
+                                "Filter_array_-_Files": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "FileArray",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_FileHashArray": {
+                            "runAfter": {
+                                "Filter_array_-_File_Hashes": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "FileHashArray",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_HostArray": {
+                            "runAfter": {
+                                "Filter_array_-_Hosts": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "HostArray",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_IPArray": {
+                            "runAfter": {
+                                "Filter_array_-_IPs": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "IPArray",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_IPComment_Array": {
+                            "runAfter": {
+                                "Initialize_IPArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "IPComment",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_Select_Properties": {
+                            "runAfter": {
+                                "Initialize_AccountsArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "SelectProperties",
+                                        "type": "string",
+                                        "value": "userPrincipalName,id,onPremisesSecurityIdentifier,onPremisesDistinguishedName,onPremisesDomainName,onPremisesSamAccountName,onPremisesSyncEnabled,mail,city,state,country,department,jobTitle,officeLocation,accountEnabled&$expand=manager($select=userPrincipalName,mail,id)"
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_URLArray": {
+                            "runAfter": {
+                                "Filter_array_-_URLs": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "URLArray",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_VIP": {
+                            "runAfter": {
+                                "Initialize_Select_Properties": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "VIP",
+                                        "type": "boolean",
+                                        "value": false
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_variable": {
+                            "runAfter": {
+                                "Compose": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "AccountComment",
+                                        "type": "string",
+                                        "value": "<table><table><tr><th>UPN</th><th>City</th><th>Country</th><th>Department</th><th>JobTitle</th><th>ManagerUPN</th><th>MFARegistered</th><th>Enabled</th><th>IsVIP</th></tr>"
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_variable_2": {
+                            "runAfter": {
+                                "Compose": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "IP Comment",
+                                        "type": "string",
+                                        "value": "<table><tr><th>IP</th><th>City</th><th>State</th><th>Country</th><th>ISP</th><th>ASN</th><th>Mobile</th><th>Risky</th><th>AbuseIPDB Score</th></tr>"
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_variable_3": {
+                            "runAfter": {
+                                "Compose": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "Host Comment",
+                                        "type": "string",
+                                        "value": "<table><tr><td>Hostname</td><td>OS</td><td>Internal IPs</td><td>Public IP</td><td>XDR Operational Status</td><td>XDR Content Status</td></tr>"
+                                    }
+                                ]
+                            }
+                        },
+                        "Response": {
+                            "runAfter": {
+                                "Add_comment_to_incident_(V3)": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                                "body": "@outputs('Compose')",
+                                "statusCode": 200
+                            }
+                        },
+                        "Response_-_API_Failure": {
+                            "runAfter": {
+                                "RiskScore": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                                "body": {
+                                    "Error": "@{parameters('PlaybookInternalName')} failed to execute with status @{outputs('HTTP_-_Test_API_Access')['statusCode']}",
+                                    "PlaybookName": "@{workflow()?['name']}",
+                                    "PlaybookResourceId": "@{workflow()?['id']}",
+                                    "PlaybookRunId": "@{workflow()?['run']?['name']}",
+                                    "PlaybookVersion": "@parameters('PlaybookVersion')",
+                                    "SourceError": "@body('HTTP_-_Test_API_Access')"
+                                },
+                                "statusCode": "@outputs('HTTP_-_Test_API_Access')['statusCode']"
+                            }
+                        },
+                        "RiskScore": {
+                            "runAfter": {
+                                "HTTP_-_Test_API_Access": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "RiskScore",
+                                        "type": "integer",
+                                        "value": 0
+                                    }
+                                ]
+                            }
+                        },
+                        "Select_Accounts": {
+                            "runAfter": {
+                                "Filter_array_-_Accounts": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Select",
+                            "inputs": {
+                                "from": "@body('Filter_array_-_Accounts')",
+                                "select": {
+                                    "RawEntity": "@item()['properties']",
+                                    "aadUserId": "@item()['properties']?['aadUserId']",
+                                    "accountName": "@item()['properties']?['accountName']",
+                                    "accountType": "@if(not(empty(item()['properties']?['aadUserId'])), 'AADId', if(not(empty(item()['properties']?['upnSuffix'])), 'UPN', if(not(empty(item()['properties']?['sid'])), 'ObjectSid', if(not(empty(item()['properties']?['ntDomain'])), 'SamAccountName', if(contains(item()['properties']?['accountName'], ',DC='), 'DistinguishedName', 'Unknown')))))",
+                                    "ntDomain": "@item()['properties']?['ntDomain']",
+                                    "sid": "@item()['properties']?['sid']",
+                                    "upnSuffix": "@item()['properties']?['upnSuffix']"
+                                }
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azuremonitorlogs": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('api-azuremonitor-id'))]",
+                                "connectionName": "azuremonitorlogs",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuremonitorlogs')]"
+                            },
+                            "azuresentinel": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('api-azuresentinel-id'))]",
+                                "connectionName": "azuresentinel",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}

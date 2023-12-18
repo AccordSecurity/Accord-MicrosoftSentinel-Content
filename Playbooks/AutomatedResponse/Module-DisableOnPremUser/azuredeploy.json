@@ -1,0 +1,170 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace_location": {
+            "type": "string",
+            "minLength": 1,
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location of the Log Analytics Workspace"
+            }
+        }
+    },
+    "variables": {
+        "api-azureautomation-id": "azureautomation-automated-response",
+        "api-azuresentinel-id": "azuresentinel-automated-response"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2018-07-01-preview",
+            "name": "[variables('api-azureautomation-id')]",
+            "location": "[parameters('workspace_location')]",
+            "properties": {
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('workspace_location'), '/managedApis/azureautomation')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2018-07-01-preview",
+            "name": "[variables('api-azuresentinel-id')]",
+            "location": "[parameters('workspace_location')]",
+            "properties": {
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('workspace_location'), '/managedApis/azuresentinel')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "Module-DisableOnPremUser",
+            "location": "[parameters('workspace_location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "actions": {
+                        "Add_comment_to_incident_(V3)": {
+                            "inputs": {
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['incidentArmId']",
+                                    "message": "<p>Job to disable on-prem user account result: @{body('Create_job')?['properties']?['status']}. <br>\nJob ID: @{body('Create_job')?['properties']?['jobId']}<br>\nJob output: @{body('Get_job_output')}</p>"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/Incidents/Comment"
+                            },
+                            "runAfter": {
+                                "Get_job_output": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection"
+                        },
+                        "Create_job": {
+                            "inputs": {
+                                "body": {
+                                    "properties": {
+                                        "parameters": {
+                                            "User": "@{triggerBody()?['userName']}"
+                                        },
+                                        "runOn": ""
+                                    }
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azureautomation']['connectionId']"
+                                    }
+                                },
+                                "method": "put",
+                                "path": "",
+                                "queries": {
+                                    "runbookName": "rb-DisableUser",
+                                    "wait": true,
+                                    "x-ms-api-version": "2015-10-31"
+                                }
+                            },
+                            "runAfter": {},
+                            "type": "ApiConnection"
+                        },
+                        "Get_job_output": {
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azureautomation']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "",
+                                "queries": {
+                                    "x-ms-api-version": "2015-10-31"
+                                }
+                            },
+                            "runAfter": {
+                                "Create_job": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection"
+                        }
+                    },
+                    "contentVersion": "1.0.0.0",
+                    "outputs": {},
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "manual": {
+                            "inputs": {
+                                "method": "POST",
+                                "schema": {
+                                    "properties": {
+                                        "incidentArmId": {
+                                            "type": "string"
+                                        },
+                                        "userName": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "kind": "Http",
+                            "type": "Request"
+                        }
+                    }
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azureautomation": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('api-azureautomation-id'))]",
+                                "connectionName": "azureautomation",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azureautomation')]"
+                            },
+                            "azuresentinel": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('api-azuresentinel-id'))]",
+                                "connectionName": "azuresentinel",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}

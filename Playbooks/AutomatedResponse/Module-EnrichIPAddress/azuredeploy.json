@@ -1,0 +1,636 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace_location": {
+            "type": "string",
+            "minLength": 1,
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location of the Log Analytics Workspace"
+            }
+        }
+    },
+    "variables": {
+        "api-azureloganalyticsdatacollector-id": "azureloganalyticsdatacollector-automated-response",
+        "api-azuremonitor-id": "azuremonitor-automated-response"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2018-07-01-preview",
+            "name": "[variables('api-azureloganalyticsdatacollector-id')]",
+            "location": "[parameters('workspace_location')]",
+            "properties": {
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('workspace_location'), '/managedApis/azureloganalyticsdatacollector')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2018-07-01-preview",
+            "name": "[variables('api-azuremonitor-id')]",
+            "location": "[parameters('workspace_location')]",
+            "properties": {
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('workspace_location'), '/managedApis/azuremonitorlogs')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "Module-EnrichIPAddress",
+            "location": "[parameters('workspace_location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "actions": {
+                        "Append_to_array_variable_3": {
+                            "inputs": {
+                                "name": "response",
+                                "value": "@addProperty(variables('riskPointsObject'), 'riskPoints', variables('risk points'))"
+                            },
+                            "runAfter": {
+                                "Initialize_variable_-_riskPointsObject": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "AppendToArrayVariable"
+                        },
+                        "Close_abuseipdb_table": {
+                            "inputs": {
+                                "name": "abuseipdb comment",
+                                "value": "</table>"
+                            },
+                            "runAfter": {
+                                "Close_ipapi_table": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "AppendToStringVariable"
+                        },
+                        "Close_ipapi_table": {
+                            "inputs": {
+                                "name": "ipapi comment",
+                                "value": "</table>"
+                            },
+                            "runAfter": {
+                                "For_each": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "AppendToStringVariable"
+                        },
+                        "For_each": {
+                            "actions": {
+                                "Condition_-_if_RFC1918": {
+                                    "actions": {},
+                                    "else": {
+                                        "actions": {
+                                            "Append_abuseipdb_results_to_comment": {
+                                                "inputs": {
+                                                    "name": "abuseipdb comment",
+                                                    "value": "<tr><td>@{body('Parse_JSON')?['data']?['ipAddress']}</td><td>@{body('Parse_JSON')?['data']?['abuseConfidenceScore']}</td><td>@{body('Parse_JSON')?['data']?['lastReportedAt']}</td></tr>"
+                                                },
+                                                "runAfter": {
+                                                    "Parse_JSON": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "AppendToStringVariable"
+                                            },
+                                            "Append_ipapi_results_to_comment": {
+                                                "inputs": {
+                                                    "name": "ipapi comment",
+                                                    "value": "<tr><td>@{items('For_each')}</td><td>@{body('HTTP_-_ipapi_lookup')?['org']}</td><td>@{body('HTTP_-_ipapi_lookup')?['city']}</td><td>@{body('HTTP_-_ipapi_lookup')['regionName']}</td><td>@{body('HTTP_-_ipapi_lookup')?['country']}</td><td>Proxy: @{body('HTTP_-_ipapi_lookup')?['proxy']} Hosting: @{body('HTTP_-_ipapi_lookup')?['hosting']}</td><td>@{body('HTTP_-_ipapi_lookup')?['mobile']}</td></tr>"
+                                                },
+                                                "runAfter": {
+                                                    "Append_to_array_variable": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "AppendToStringVariable"
+                                            },
+                                            "Append_to_array_variable": {
+                                                "inputs": {
+                                                    "name": "response",
+                                                    "value": "@addProperty(body('HTTP_-_ipapi_lookup'), 'type', 'ipapi')"
+                                                },
+                                                "runAfter": {
+                                                    "HTTP_-_ipapi_lookup": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "AppendToArrayVariable"
+                                            },
+                                            "Append_to_array_variable_2": {
+                                                "inputs": {
+                                                    "name": "response",
+                                                    "value": "@addProperty(body('HTTP_abuseipdb_check')?['data'], 'type', 'abuseipdb')"
+                                                },
+                                                "runAfter": {
+                                                    "Append_abuseipdb_results_to_comment": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "AppendToArrayVariable"
+                                            },
+                                            "Condition_-_high_abuse_confidence": {
+                                                "actions": {
+                                                    "Increment_variable_2": {
+                                                        "inputs": {
+                                                            "name": "risk points",
+                                                            "value": 5
+                                                        },
+                                                        "runAfter": {},
+                                                        "type": "IncrementVariable"
+                                                    }
+                                                },
+                                                "expression": {
+                                                    "and": [
+                                                        {
+                                                            "greater": [
+                                                                "@body('HTTP_abuseipdb_check')?['data']?['abuseConfidenceScore']",
+                                                                25
+                                                            ]
+                                                        }
+                                                    ]
+                                                },
+                                                "runAfter": {
+                                                    "Condition_-_ip_is_proxy": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "If"
+                                            },
+                                            "Condition_-_ip_is_proxy": {
+                                                "actions": {
+                                                    "Increment_variable": {
+                                                        "inputs": {
+                                                            "name": "risk points",
+                                                            "value": 5
+                                                        },
+                                                        "runAfter": {},
+                                                        "type": "IncrementVariable"
+                                                    }
+                                                },
+                                                "expression": {
+                                                    "or": [
+                                                        {
+                                                            "equals": [
+                                                                "@body('HTTP_-_ipapi_lookup')?['proxy']",
+                                                                true
+                                                            ]
+                                                        },
+                                                        {
+                                                            "equals": [
+                                                                "@body('HTTP_-_ipapi_lookup')?['hosting']",
+                                                                true
+                                                            ]
+                                                        }
+                                                    ]
+                                                },
+                                                "runAfter": {
+                                                    "Send_Data": [
+                                                        "Succeeded",
+                                                        "Failed",
+                                                        "Skipped",
+                                                        "TimedOut"
+                                                    ]
+                                                },
+                                                "type": "If"
+                                            },
+                                            "HTTP_-_ipapi_lookup": {
+                                                "inputs": {
+                                                    "method": "GET",
+                                                    "uri": "http://ip-api.com/json/@{items('For_each')}?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,mobile,proxy,hosting,query"
+                                                },
+                                                "runAfter": {},
+                                                "type": "Http"
+                                            },
+                                            "HTTP_abuseipdb_check": {
+                                                "inputs": {
+                                                    "headers": {
+                                                        "Key": ""
+                                                    },
+                                                    "method": "GET",
+                                                    "queries": {
+                                                        "ipAddress": "@{items('For_each')}"
+                                                    },
+                                                    "uri": "https://api.abuseipdb.com/api/v2/check"
+                                                },
+                                                "runAfter": {
+                                                    "Append_ipapi_results_to_comment": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "Http"
+                                            },
+                                            "Parse_JSON": {
+                                                "inputs": {
+                                                    "content": "@body('HTTP_abuseipdb_check')",
+                                                    "schema": {
+                                                        "properties": {
+                                                            "data": {
+                                                                "properties": {
+                                                                    "abuseConfidenceScore": {
+                                                                        "type": [
+                                                                            "integer",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "countryCode": {
+                                                                        "type": [
+                                                                            "string",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "countryName": {
+                                                                        "type": [
+                                                                            "string",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "domain": {
+                                                                        "type": [
+                                                                            "string",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "hostnames": {
+                                                                        "type": [
+                                                                            "array",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "ipAddress": {
+                                                                        "type": [
+                                                                            "string",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "ipVersion": {
+                                                                        "type": [
+                                                                            "integer",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "isPublic": {
+                                                                        "type": [
+                                                                            "boolean",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "isTor": {
+                                                                        "type": [
+                                                                            "boolean",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "isWhitelisted": {
+                                                                        "type": [
+                                                                            "boolean",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "isp": {
+                                                                        "type": [
+                                                                            "string",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "lastReportedAt": {
+                                                                        "type": [
+                                                                            "string",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "numDistinctUsers": {
+                                                                        "type": [
+                                                                            "integer",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "reports": {
+                                                                        "items": {
+                                                                            "properties": {
+                                                                                "categories": {
+                                                                                    "items": {
+                                                                                        "type": [
+                                                                                            "integer",
+                                                                                            "null"
+                                                                                        ]
+                                                                                    },
+                                                                                    "type": [
+                                                                                        "array",
+                                                                                        "null"
+                                                                                    ]
+                                                                                },
+                                                                                "comment": {
+                                                                                    "type": [
+                                                                                        "string",
+                                                                                        "null"
+                                                                                    ]
+                                                                                },
+                                                                                "reportedAt": {
+                                                                                    "type": [
+                                                                                        "string",
+                                                                                        "null"
+                                                                                    ]
+                                                                                },
+                                                                                "reporterCountryCode": {
+                                                                                    "type": [
+                                                                                        "string",
+                                                                                        "null"
+                                                                                    ]
+                                                                                },
+                                                                                "reporterCountryName": {
+                                                                                    "type": [
+                                                                                        "string",
+                                                                                        "null"
+                                                                                    ]
+                                                                                },
+                                                                                "reporterId": {
+                                                                                    "type": [
+                                                                                        "integer",
+                                                                                        "null"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            "required": [],
+                                                                            "type": [
+                                                                                "object",
+                                                                                "null"
+                                                                            ]
+                                                                        },
+                                                                        "type": [
+                                                                            "array",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "totalReports": {
+                                                                        "type": [
+                                                                            "integer",
+                                                                            "null"
+                                                                        ]
+                                                                    },
+                                                                    "usageType": {
+                                                                        "type": [
+                                                                            "string",
+                                                                            "null"
+                                                                        ]
+                                                                    }
+                                                                },
+                                                                "type": [
+                                                                    "object",
+                                                                    "null"
+                                                                ]
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    }
+                                                },
+                                                "runAfter": {
+                                                    "HTTP_abuseipdb_check": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "ParseJson"
+                                            },
+                                            "Send_Data": {
+                                                "inputs": {
+                                                    "body": "{\n\"ipAddress\":@{items('For_each')}\",\n\"asn\":\"@{body('HTTP_-_ipapi_lookup')?['org']}\",\n\"city\":\"@{body('HTTP_-_ipapi_lookup')?['city']}\",\n\"state\":\"@{body('HTTP_-_ipapi_lookup')['regionName']}\",\n\"country\":\"@{body('HTTP_-_ipapi_lookup')?['country']}\",\n\"isProxy\":\" @{body('HTTP_-_ipapi_lookup')?['proxy']}\",\n\"isHosting\":\" @{body('HTTP_-_ipapi_lookup')?['hosting']}\",\n\"isMobile\":\"@{body('HTTP_-_ipapi_lookup')?['mobile']}\",\n\"abuseConfidenceScore\":\"@{body('Parse_JSON')?['data']?['abuseConfidenceScore']}\",\n\"totalReports\":\"@{body('Parse_JSON')?['data']?['totalReports']}\",\n\"lastReported\":\"@{body('Parse_JSON')?['data']?['lastReportedAt']}\"\n}",
+                                                    "headers": {
+                                                        "Log-Type": "IpEntityEnrichment"
+                                                    },
+                                                    "host": {
+                                                        "connection": {
+                                                            "name": "@parameters('$connections')['azureloganalyticsdatacollector_1']['connectionId']"
+                                                        }
+                                                    },
+                                                    "method": "post",
+                                                    "path": "/api/logs"
+                                                },
+                                                "runAfter": {
+                                                    "Append_to_array_variable_2": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "ApiConnection"
+                                            }
+                                        }
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@body('RFC1918_check')?['value'][0]['isPrivate']",
+                                                    true
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "runAfter": {
+                                        "RFC1918_check": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "RFC1918_check": {
+                                    "inputs": {
+                                        "body": "print \"@{items('For_each')}\"\n| extend isPrivate = ipv4_is_private(print_0)",
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/queryData",
+                                        "queries": {
+                                            "resourcegroups": "[parameters('workspace_resource_group')]",
+                                            "resourcename": "LogAnalyticsAndSentinel",
+                                            "resourcetype": "Log Analytics Workspace",
+                                            "subscriptions": "[subscription().subscriptionId]",
+                                            "timerange": "Last 24 hours"
+                                        }
+                                    },
+                                    "runAfter": {},
+                                    "type": "ApiConnection"
+                                }
+                            },
+                            "foreach": "@triggerBody()?['ipAddress']",
+                            "runAfter": {
+                                "Initialize_variable": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "Initialize_variable": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "enrichment data object",
+                                        "type": "object"
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Initialize_variable_-_response": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable"
+                        },
+                        "Initialize_variable_-_abuseipdb_comment": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "abuseipdb comment",
+                                        "type": "string",
+                                        "value": "<table><tr><th>IP</th><th>Abuse Confidence Score (0-100)</th><th>Last Reported</th></tr>"
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Initialize_variable_-_ipapi_comment": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable"
+                        },
+                        "Initialize_variable_-_ipapi_comment": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "ipapi comment",
+                                        "type": "string",
+                                        "value": "<table><tr><th>IP</th><th>ISP</th><th>City</th><th>State</th><th>Country</th><th>Risky?</th><th>Mobile Provider</th></tr>"
+                                    }
+                                ]
+                            },
+                            "runAfter": {},
+                            "type": "InitializeVariable"
+                        },
+                        "Initialize_variable_-_response": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "response",
+                                        "type": "array"
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Initialize_variable_-_risk_points": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable"
+                        },
+                        "Initialize_variable_-_riskPointsObject": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "riskPointsObject",
+                                        "type": "object",
+                                        "value": {
+                                            "type": "riskPoints"
+                                        }
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Close_abuseipdb_table": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable"
+                        },
+                        "Initialize_variable_-_risk_points": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "risk points",
+                                        "type": "integer",
+                                        "value": 0
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Initialize_variable_-_abuseipdb_comment": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable"
+                        },
+                        "Response": {
+                            "inputs": {
+                                "body": "@variables('response')",
+                                "statusCode": 200
+                            },
+                            "kind": "Http",
+                            "runAfter": {
+                                "Append_to_array_variable_3": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Response"
+                        }
+                    },
+                    "contentVersion": "1.0.0.0",
+                    "outputs": {},
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "manual": {
+                            "inputs": {
+                                "method": "POST",
+                                "schema": {
+                                    "properties": {
+                                        "incidentArmId": {
+                                            "type": "string"
+                                        },
+                                        "ipAddress": {
+                                            "type": "array"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "kind": "Http",
+                            "type": "Request"
+                        }
+                    }
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azureloganalyticsdatacollector": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('api-azureloganalyticsdatacollector-id'))]",
+                                "connectionName": "azureloganalyticsdatacollector",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuremonitorlogs')]"
+                            },
+                            "azuremonitorlogs": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('api-azuremonitor-id'))]",
+                                "connectionName": "azuremonitorlogs",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuremonitorlogs')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
